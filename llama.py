@@ -44,6 +44,7 @@ class RMSNorm(torch.nn.Module):
             torch.Tensor: The normalized tensor.
         """
         # todo
+        # my comment
         raise NotImplementedError
 
     def forward(self, x):
