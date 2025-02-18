@@ -97,8 +97,8 @@ class Attention(nn.Module):
         attention matrix before applying it to the value tensor.
         '''
         # todo
-        head_dim = query.shape(-1)
-        scaling_factor = torch.sqrt(head_dim)
+        head_dim = query.shape[-1]
+        scaling_factor = math.sqrt(head_dim)
         attention_scores = torch.matmul(query, key.transpose(-2, -1))/ scaling_factor # Shape: (bs, n_local_heads, seqlen, seqlen)
         attention_weights = torch.softmax(attention_scores, dim=-1)
         attention_output = torch.matmul(self.attn_dropout(attention_weights), value)
@@ -206,12 +206,11 @@ class LlamaLayer(nn.Module):
            output of the feed-forward network
         '''
         # todo
-        y = self.ffn_norm(x)
-        y = self.attention(y)
-        z = x + y
-        z = self.attention_norm(z)
-        t = self.feed_forward(z)
-        t = y + t
+        y = self.attention_norm(x)
+        y = self.attention(y) + x
+
+        z = self.ffn_norm(y)
+        t = self.feed_forward(z) + y
 
         return t
 
@@ -306,10 +305,11 @@ class Llama(LlamaPreTrainedModel):
 
                 Note that we are not using top-k sampling/nucleus sampling in this procedure.
                 '''
-                scaled_logits = logits/ temperature
+                scaled_logits = logits/ max(temperature, 1e-6)
                 probs = F.softmax(scaled_logits, dim=-1)
-
+                probs = torch.clamp(probs, min=1e-8, max=1.0)  # Avoid zeros
                 idx_next = torch.multinomial(probs, num_samples=1)
+
 
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)

@@ -48,10 +48,8 @@ def apply_rotary_emb(
         Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
     """
 
-    batch_size, seqlen, n_local_heads, _ = query.shape
-    _, _, n_local_kv_heads, _ = key.shape
+    batch_size, seqlen, n_heads, _ = query.shape
 
-    print(n_local_heads, n_local_kv_heads)
     device = query.device
     # todo
     #
@@ -63,49 +61,52 @@ def apply_rotary_emb(
     key_real, key_imag = key.float().reshape(key.shape[:-1] + (-1, 2)).unbind(-1)
     # This separates each query/key vector into its odd and even indices (assuming *one-indexing*).
     # query_real contains q_1, q_3, q_5, ... and query_imag contains q_2, q_4, q_6, ...
-
+    #DEBUG
+    #print("query_real shape:", query_real.shape)
+    #print("query_imag shape:", query_imag.shape)
     # First, compute the trigonometric values in the second and fourth columns in
     # slide 22 (linked above).
 
-    # Calculate half of the dimension and frequency
-    dim_half = head_dim // 2
-    freq = 1.0 / (theta ** (torch.arange(0, dim_half, 2).float() / dim_half)).to(device)  # Shape: (dim_half//2,)
+    # Step 1: Compute frequency tensor for rotary embeddings
+    dim_half = head_dim // 2  # RoPE works on pairs of dimensions
+    freq = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim)).to(device)  # Shape: (dim_half//2,)
+
+    # Step 2: Compute sin and cos values
+    positions = torch.arange(seqlen, device=device).float().unsqueeze(1)  # Shape: (seqlen, 1)
+    angles = positions * freq  # Shape: (seqlen, dim_half//2)
+
+    #DEBUG
+    #print("freq shape:", freq.shape)
+    #print("positions shape:", positions.shape)
+    #print("angles shape:", angles.shape)
+    
+
+    cos_vals = torch.cos(angles)  # Shape: (seqlen, dim_half//2)
+    sin_vals = torch.sin(angles)  # Shape: (seqlen, dim_half//2)
+    
+    #DEBUG
+    #print("cos_vals shape:", cos_vals.shape)
+    #print("sin_vals shape:", sin_vals.shape)
+
+    # Step 3: Reshape for broadcasting
+    cos_vals = reshape_for_broadcast(cos_vals, query_real)  # Shape: (1, seqlen, 1, dim_half)
+    sin_vals = reshape_for_broadcast(sin_vals, query_real)  # Shape: (1, seqlen, 1, dim_half)
+
+    #DEBUG
+    #print("cos_vals shape:", cos_vals.shape)
+    #print("sin_vals shape:", sin_vals.shape)
 
 
-    positions = torch.arange(seqlen).float().unsqueeze(1)  # Shape: (seqlen, 1)
-    angles = positions * freq.unsqueeze(0)  # Shape: (seqlen, dim_half//2)
-
-    # Correct shape for broadcasting
-    cos_vals = torch.cos(angles).repeat(1, 2)  # Shape: (seqlen, dim_half)
-    sin_vals = torch.sin(angles).repeat(1, 2)  # Shape: (seqlen, dim_half)
-
-    cos_vals = torch.cos(angles).unsqueeze(0).unsqueeze(2).expand(batch_size, seqlen, 2, dim_half)
-    sin_vals = torch.sin(angles).unsqueeze(0).unsqueeze(2).expand(batch_size, seqlen, 2, dim_half)
-
-
-
-    # Reshape query and key to separate real/imaginary parts
-    query_real, query_imag = query.reshape(batch_size, seqlen, n_local_heads, -1, 2).unbind(-1)
-    key_real, key_imag = key.reshape(batch_size, seqlen, n_local_kv_heads, -1, 2).unbind(-1)
-
-
-    # Apply rotary embeddings
+    # Step 5: Apply RoPE transformation using rotation formula
     query_out_real = query_real * cos_vals - query_imag * sin_vals
     query_out_imag = query_real * sin_vals + query_imag * cos_vals
 
     key_out_real = key_real * cos_vals - key_imag * sin_vals
     key_out_imag = key_real * sin_vals + key_imag * cos_vals
 
-    # Fix duplicated rows: Properly reshape the stacked tensor
-    query_out = torch.stack((query_out_real, query_out_imag), dim=-1).reshape(batch_size, seqlen, n_local_heads, head_dim)
-    key_out = torch.stack((key_out_real, key_out_imag), dim=-1).reshape(batch_size, seqlen, n_local_kv_heads, head_dim)
-
-    print(query_out[:, :, 0, :])  # First head
-    print(query_out[:, :, 1, :])  # Second head
-
-
-
-
+    # Step 6: Reshape back to original shape
+    query_out = torch.stack((query_out_real, query_out_imag), dim=-1).reshape(batch_size, seqlen, n_heads, head_dim)
+    key_out = torch.stack((key_out_real, key_out_imag), dim=-1).reshape(batch_size, seqlen, n_heads, head_dim)
 
 
     # Return the rotary position embeddings for the query and key tensors
