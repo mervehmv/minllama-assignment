@@ -47,7 +47,7 @@ class RMSNorm(torch.nn.Module):
         rms = torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
         x_norm = x / rms
 
-        raise x_norm
+        return x_norm
 
     def forward(self, x):
         """
@@ -310,7 +310,7 @@ class Llama(LlamaPreTrainedModel):
                 probs = F.softmax(scaled_logits, dim=-1)
 
                 idx_next = torch.multinomial(probs, num_samples=1)
-                
+
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
 
